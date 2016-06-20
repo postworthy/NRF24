@@ -48,6 +48,14 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
+    <None Include="Arduino\NRF24_Scanner.ino" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Arduino\nRF24L01.h" />
+    <None Include="Arduino\printf.h" />
+    <None Include="Arduino\RF24.cpp" />
+    <None Include="Arduino\RF24.h" />
+    <None Include="Arduino\RF24_config.h" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
