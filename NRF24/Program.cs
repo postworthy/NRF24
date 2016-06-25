@@ -59,24 +59,30 @@ namespace NRF24
                 }
             }
         }
+
         private static void ResetArduino()
         {
             if (serial != null)
             {
                 serial.ReadExisting();
                 Console.WriteLine("Resetting arduino...");
-                while (serial.BytesToRead == 0)
+                do
                 {
-                    for (int i = 0; i < 2; i++)
+                    while (serial.BytesToRead == 0)
                     {
                         serial.DtrEnable = true;
-                        Thread.Sleep(1000);
-                        serial.DtrEnable = false;
+                        serial.Close();
+                        //Thread.Sleep(500);
+                        serial.Open();
                         Thread.Sleep(500);
                     }
-                    Thread.Sleep(1000);
                 }
-                serial.ReadExisting();
+                while (serial.ReadExisting() != "255");
+                serial.DtrEnable = false;
+                serial.Close();
+                serial.Open();
+                Thread.Sleep(500);
+
             }
         }
         private static void Go()
@@ -85,7 +91,7 @@ namespace NRF24
             {
                 do
                 {
-                    serial.Write("!");
+                    serial.WriteLine("!");
                     Thread.Sleep(1000);
                 } while (serial.BytesToRead == 0 || serial.ReadChar() != '!');
                 serial.ReadExisting();
@@ -93,26 +99,39 @@ namespace NRF24
         }
         private static void TuneIn()
         {
+            string junk = "";
             IsTuning = true;
             Console.Clear();
             ResetArduino();
             if (watch != null)
             {
-                serial.ReadExisting();
                 if (Convert.ToString(BitConverter.GetBytes(watch.Address).First(), 2).StartsWith("0"))
                 {
-                    serial.Write(new byte[] { Convert.ToByte('5') }, 0, 1);
-                    serial.BaseStream.Flush();
+                    do
+                    {
+                        while (serial.BytesToRead == 0)
+                        {
+                            serial.WriteLine("5");
+                            serial.BaseStream.Flush();
+                            Thread.Sleep(500);
+                        }
+                        junk = serial.ReadExisting();
+                    } while (junk.Trim() != "0x55");
                 }
-
+                junk = "";
                 if (watch.Channel > 0)
                 {
-                    var bytes = new byte[] { Convert.ToByte('c'), Convert.ToByte(watch.Channel) };
-                    serial.Write(bytes, 0, bytes.Length);
-                    serial.BaseStream.Flush();
+                    do
+                    {
+                        while (serial.BytesToRead == 0)
+                        {
+                            serial.WriteLine("c" + watch.Channel);
+                            serial.BaseStream.Flush();
+                            Thread.Sleep(500);
+                        }
+                        junk = serial.ReadExisting();
+                    } while (junk.Trim() != watch.Channel.ToString());
                 }
-                Thread.Sleep(1000);
-                serial.ReadExisting();
             }
             Go();
             IsTuning = false;
@@ -160,7 +179,9 @@ namespace NRF24
             var addresses = new ConcurrentDictionary<ulong, Device>();
             var com = SerialPort.GetPortNames().FirstOrDefault();
             serial = new SerialPort(com, BAUDRATE, Parity.None, 8, StopBits.One);
+            serial.DtrEnable = true;
             serial.Open();
+            serial.DtrEnable = false;
             Console.WriteLine("Connecting to arduino...");
 
             ResetArduino();
@@ -170,56 +191,64 @@ namespace NRF24
 
             var listen = Task.Run(() =>
             {
-                while (serial.IsOpen)
+                while (true)
                 {
-                    if (IsTuning) continue;
-                    var line = serial.ReadLine();
-                    var split = line.Split(',');
-                    if (split.Length == 8 && split[0] == "data" && split[7] == "atad")
+                    while (serial.IsOpen)
                     {
+                        if (IsTuning) continue;
+                        string line = "";
                         try
                         {
-                            var hexAddress = split[5].Substring(2, 10);
-                            var address = Convert.ToUInt64(hexAddress, 16);
-                            chan = ushort.Parse(split[3]);
-                            addresses.AddOrUpdate(address, new Device()
-                            {
-                                Address = address,
-                                Channel = chan,
-                                DataRate = split[4],
-                                Seen = 1
-                            },
-                            (x, y) =>
-                            {
-                                y.Seen++;
-                                return y;
-                            });
-                            if (watch != null && address == watch.Address)
-                            {
-                                var x = split[6].Replace("0x", "").TrimEnd('0');
-                                x = x + (x.Length % 2 == 0 ? "" : "0");
-                                if (x.Length > 0)
-                                {
-                                    byte[] data = null;
-
-                                    if (x.StartsWith("C") && x.EndsWith("80")) //Enhanced mode we need to get rid of the first 9 bits...
-                                    {
-                                        data = StringToByteArray(x);
-                                        ShiftLeft(data);
-                                    }
-                                    else
-                                        data = StringToByteArray(x);
-
-                                    watch.FileStreamOut.Write(data.Skip(1).Take(data.Length - 2).ToArray());
-                                    watch.FileStreamOut.Flush();
-                                }
-
-                            }
+                            line = serial.ReadLine();
                         }
                         catch { }
-                    }
+                        var split = line.Split(',');
+                        if (split.Length == 8 && split[0] == "data" && split[7] == "atad")
+                        {
+                            try
+                            {
+                                var hexAddress = split[5].Substring(2, 10);
+                                var address = Convert.ToUInt64(hexAddress, 16);
+                                chan = ushort.Parse(split[3]);
+                                addresses.AddOrUpdate(address, new Device()
+                                {
+                                    Address = address,
+                                    Channel = chan,
+                                    DataRate = split[4],
+                                    Seen = 1
+                                },
+                                (x, y) =>
+                                {
+                                    y.Seen++;
+                                    return y;
+                                });
+                                if (watch != null && address == watch.Address)
+                                {
+                                    var x = split[6].Replace("0x", "").TrimEnd('0');
+                                    x = x + (x.Length % 2 == 0 ? "" : "0");
+                                    if (x.Length > 0)
+                                    {
+                                        byte[] data = null;
 
-                    reads++;
+                                        if (x.StartsWith("C") && x.EndsWith("80")) //Enhanced mode we need to get rid of the first 9 bits...
+                                        {
+                                            data = StringToByteArray(x);
+                                            ShiftLeft(data);
+                                        }
+                                        else
+                                            data = StringToByteArray(x);
+
+                                        watch.FileStreamOut.Write(data.Skip(1).Take(data.Length - 2).ToArray());
+                                        watch.FileStreamOut.Flush();
+                                    }
+
+                                }
+                            }
+                            catch { }
+                        }
+
+                        reads++;
+                    }
                 }
             });
 
@@ -235,14 +264,14 @@ namespace NRF24
                     if (watch == null)
                     {
                         tick++;
-                        serial.Write(new byte[] { Convert.ToByte('+') }, 0, 1);
+                        serial.WriteLine("+");
                         serial.BaseStream.Flush();
                         if (tick % channels == 0)
                         {
                             if (addr)
-                                serial.Write(new byte[] { Convert.ToByte('a') }, 0, 1);
+                                serial.WriteLine("a");
                             else
-                                serial.Write(new byte[] { Convert.ToByte('5') }, 0, 1);
+                                serial.WriteLine("5");
 
                             serial.BaseStream.Flush();
                             addr = !addr;
